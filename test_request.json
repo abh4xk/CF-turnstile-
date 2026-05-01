@@ -1,0 +1,9 @@
+{
+  "clientKey": "YOUR_API_KEY_HERE",
+  "task": {
+    "type": "TurnstileTask",
+    "websiteURL": "https://onlyfans.com/",
+    "websiteKey": "0x4AAAAAAAxTpmbMvo7Qj6zy",
+    "action": "login"
+  }
+}

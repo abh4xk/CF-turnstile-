@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/playwright-community/playwright-go"
 	"github.com/redis/go-redis/v9"
 )
@@ -38,7 +39,7 @@ var CONFIG = struct {
 	RedisDB:             0,
 	ResultTTL:           1800 * time.Second,
 	BrowserRecycleAfter: 100,
-	APIKey:              "YOUR_API_KEY_HERE", // Change this to your desired API key
+	APIKey:              "TEST_API_KEY_12345", // Temporary test API key
 }
 
 type SolveTask struct {
@@ -625,6 +626,114 @@ func getTaskResultHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func turnstileHandler(w http.ResponseWriter, r *http.Request) {
+	url := r.URL.Query().Get("url")
+	sitekey := r.URL.Query().Get("sitekey")
+	actionStr := r.URL.Query().Get("action")
+	cdataStr := r.URL.Query().Get("cdata")
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if url == "" || sitekey == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId":          1,
+			"errorCode":        "ERROR_WRONG_PAGEURL",
+			"errorDescription": "Both 'url' and 'sitekey' are required",
+		})
+		return
+	}
+
+	taskID := uuid.New().String()
+
+	var action, cdata *string
+	if actionStr != "" {
+		action = &actionStr
+	}
+	if cdataStr != "" {
+		cdata = &cdataStr
+	}
+
+	task := &SolveTask{
+		TaskID:    taskID,
+		URL:       url,
+		Sitekey:   sitekey,
+		Action:    action,
+		Cdata:     cdata,
+		Status:    "pending",
+		CreatedAt: float64(time.Now().UnixNano()) / 1e9,
+	}
+
+	saveTaskToRedis(task)
+
+	select {
+	case taskQueue <- task:
+		stats.Lock()
+		stats.Total++
+		stats.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId": 0,
+			"taskId":  taskID,
+		})
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId":          1,
+			"errorCode":        "ERROR_UNKNOWN",
+			"errorDescription": "Task queue is full",
+		})
+	}
+}
+
+func resultHandler(w http.ResponseWriter, r *http.Request) {
+	taskID := r.URL.Query().Get("id")
+	w.Header().Set("Content-Type", "application/json")
+
+	if taskID == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId":          1,
+			"errorCode":        "ERROR_WRONG_CAPTCHA_ID",
+			"errorDescription": "Invalid task ID/Request parameter",
+		})
+		return
+	}
+
+	task := getTaskFromRedis(taskID)
+	if task == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId":          1,
+			"errorCode":        "ERROR_CAPTCHA_UNSOLVABLE",
+			"errorDescription": "Task not found",
+		})
+		return
+	}
+
+	if task.Status == "pending" || task.Status == "solving" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "processing",
+		})
+		return
+	}
+
+	if task.Status == "failed" || task.Token == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId":          1,
+			"errorCode":        "ERROR_CAPTCHA_UNSOLVABLE",
+			"errorDescription": "Workers could not solve the Captcha",
+		})
+		return
+	}
+
+	if task.Token != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"errorId": 0,
+			"status":  "ready",
+			"solution": map[string]interface{}{
+				"token": *task.Token,
+			},
+		})
+		return
+	}
+}
+
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, "%s", `
@@ -704,7 +813,7 @@ func main() {
 
 	http.HandleFunc("/createTask", createTaskHandler)
 	http.HandleFunc("/getTaskResult", getTaskResultHandler)
-	// Keep old endpoints for backward compatibility
+	// Legacy endpoints for backward compatibility
 	http.HandleFunc("/turnstile", turnstileHandler)
 	http.HandleFunc("/result", resultHandler)
 	http.HandleFunc("/", indexHandler)
