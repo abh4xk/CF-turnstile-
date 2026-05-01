@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/playwright-community/playwright-go"
 	"github.com/redis/go-redis/v9"
 )
@@ -27,6 +26,7 @@ var CONFIG = struct {
 	RedisDB             int
 	ResultTTL           time.Duration
 	BrowserRecycleAfter int
+	APIKey              string
 }{
 	NumBrowsers:         2,
 	TabsPerBrowser:      10,
@@ -38,6 +38,7 @@ var CONFIG = struct {
 	RedisDB:             0,
 	ResultTTL:           1800 * time.Second,
 	BrowserRecycleAfter: 100,
+	APIKey:              "YOUR_API_KEY_HERE", // Change this to your desired API key
 }
 
 type SolveTask struct {
@@ -53,6 +54,39 @@ type SolveTask struct {
 	Attempts    int      `json:"attempts"`
 	CreatedAt   float64  `json:"created_at"`
 	CompletedAt *float64 `json:"completed_at"`
+}
+
+type CreateTaskRequest struct {
+	ClientKey string `json:"clientKey"`
+	Task      Task   `json:"task"`
+}
+
+type Task struct {
+	Type       string `json:"type"`
+	WebsiteURL string `json:"websiteURL"`
+	WebsiteKey string `json:"websiteKey"`
+	Action     string `json:"action,omitempty"`
+	Cdata      string `json:"cdata,omitempty"`
+}
+
+type CreateTaskResponse struct {
+	ErrorID int   `json:"errorId"`
+	TaskID  int64 `json:"taskId"`
+}
+
+type GetTaskResultRequest struct {
+	ClientKey string `json:"clientKey"`
+	TaskID    int64  `json:"taskId"`
+}
+
+type GetTaskResultResponse struct {
+	ErrorID  int       `json:"errorId"`
+	Status   string    `json:"status,omitempty"`
+	Solution *Solution `json:"solution,omitempty"`
+}
+
+type Solution struct {
+	Token string `json:"token"`
 }
 
 type BrowserWorker struct {
@@ -457,37 +491,57 @@ func cleanupBrowserPool() {
 	log.Println("✅ Chrome browser pool cleaned up")
 }
 
-func turnstileHandler(w http.ResponseWriter, r *http.Request) {
-	url := r.URL.Query().Get("url")
-	sitekey := r.URL.Query().Get("sitekey")
-	actionStr := r.URL.Query().Get("action")
-	cdataStr := r.URL.Query().Get("cdata")
+func validateAPIKey(clientKey string) bool {
+	return clientKey == CONFIG.APIKey || CONFIG.APIKey == "YOUR_API_KEY_HERE" // Allow any key if default
+}
 
+func createTaskHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if url == "" || sitekey == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId":          1,
-			"errorCode":        "ERROR_WRONG_PAGEURL",
-			"errorDescription": "Both 'url' and 'sitekey' are required",
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CreateTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(CreateTaskResponse{
+			ErrorID: 1,
 		})
 		return
 	}
 
-	taskID := uuid.New().String()
+	// Validate API key
+	if !validateAPIKey(req.ClientKey) {
+		json.NewEncoder(w).Encode(CreateTaskResponse{
+			ErrorID: 1,
+		})
+		return
+	}
+
+	// Validate task
+	if req.Task.Type != "TurnstileTask" || req.Task.WebsiteURL == "" || req.Task.WebsiteKey == "" {
+		json.NewEncoder(w).Encode(CreateTaskResponse{
+			ErrorID: 1,
+		})
+		return
+	}
+
+	// Generate task ID as integer (like other services)
+	taskID := time.Now().UnixNano() / 1000000 // Convert to milliseconds
 
 	var action, cdata *string
-	if actionStr != "" {
-		action = &actionStr
+	if req.Task.Action != "" {
+		action = &req.Task.Action
 	}
-	if cdataStr != "" {
-		cdata = &cdataStr
+	if req.Task.Cdata != "" {
+		cdata = &req.Task.Cdata
 	}
 
 	task := &SolveTask{
-		TaskID:    taskID,
-		URL:       url,
-		Sitekey:   sitekey,
+		TaskID:    fmt.Sprintf("%d", taskID),
+		URL:       req.Task.WebsiteURL,
+		Sitekey:   req.Task.WebsiteKey,
 		Action:    action,
 		Cdata:     cdata,
 		Status:    "pending",
@@ -501,64 +555,70 @@ func turnstileHandler(w http.ResponseWriter, r *http.Request) {
 		stats.Lock()
 		stats.Total++
 		stats.Unlock()
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId": 0,
-			"taskId":  taskID,
+		json.NewEncoder(w).Encode(CreateTaskResponse{
+			ErrorID: 0,
+			TaskID:  taskID,
 		})
 	default:
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId":          1,
-			"errorCode":        "ERROR_UNKNOWN",
-			"errorDescription": "Task queue is full",
+		json.NewEncoder(w).Encode(CreateTaskResponse{
+			ErrorID: 1,
 		})
 	}
 }
 
-func resultHandler(w http.ResponseWriter, r *http.Request) {
-	taskID := r.URL.Query().Get("id")
+func getTaskResultHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if taskID == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId":          1,
-			"errorCode":        "ERROR_WRONG_CAPTCHA_ID",
-			"errorDescription": "Invalid task ID/Request parameter",
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req GetTaskResultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(GetTaskResultResponse{
+			ErrorID: 1,
 		})
 		return
 	}
 
-	task := getTaskFromRedis(taskID)
+	// Validate API key
+	if !validateAPIKey(req.ClientKey) {
+		json.NewEncoder(w).Encode(GetTaskResultResponse{
+			ErrorID: 1,
+		})
+		return
+	}
+
+	task := getTaskFromRedis(fmt.Sprintf("%d", req.TaskID))
 	if task == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId":          1,
-			"errorCode":        "ERROR_CAPTCHA_UNSOLVABLE",
-			"errorDescription": "Task not found",
+		json.NewEncoder(w).Encode(GetTaskResultResponse{
+			ErrorID: 1,
 		})
 		return
 	}
 
 	if task.Status == "pending" || task.Status == "solving" {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "processing",
+		json.NewEncoder(w).Encode(GetTaskResultResponse{
+			ErrorID: 0,
+			Status:  "processing",
 		})
 		return
 	}
 
 	if task.Status == "failed" || task.Token == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId":          1,
-			"errorCode":        "ERROR_CAPTCHA_UNSOLVABLE",
-			"errorDescription": "Workers could not solve the Captcha",
+		json.NewEncoder(w).Encode(GetTaskResultResponse{
+			ErrorID: 1,
 		})
 		return
 	}
 
 	if task.Token != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errorId": 0,
-			"status":  "ready",
-			"solution": map[string]interface{}{
-				"token": *task.Token,
+		json.NewEncoder(w).Encode(GetTaskResultResponse{
+			ErrorID: 0,
+			Status:  "ready",
+			Solution: &Solution{
+				Token: *task.Token,
 			},
 		})
 		return
@@ -642,6 +702,9 @@ func main() {
 
 	startWorkers()
 
+	http.HandleFunc("/createTask", createTaskHandler)
+	http.HandleFunc("/getTaskResult", getTaskResultHandler)
+	// Keep old endpoints for backward compatibility
 	http.HandleFunc("/turnstile", turnstileHandler)
 	http.HandleFunc("/result", resultHandler)
 	http.HandleFunc("/", indexHandler)

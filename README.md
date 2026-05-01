@@ -42,19 +42,66 @@ make run
 
 ## 📖 Usage
 
-### API Endpoints
+### Professional API Endpoints
 
-#### Submit a Solve Task
+#### Create Task (POST)
 ```bash
-curl "http://localhost:5073/turnstile?url=https://example.com&sitekey=your-sitekey&action=login&cdata="
+curl -X POST http://localhost:5073/createTask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientKey": "YOUR_API_KEY",
+    "task": {
+      "type": "TurnstileTask",
+      "websiteURL": "https://example.com",
+      "websiteKey": "0x4AAAAAAABkUYJ2ABcZqyJ",
+      "action": "login",
+      "cdata": "optional_data"
+    }
+  }'
 ```
 
-#### Check Result
-```bash
-curl "http://localhost:5073/result?id=TASK_ID"
+**Response:**
+```json
+{
+  "errorId": 0,
+  "taskId": 407533072
+}
 ```
 
-#### API Documentation
+#### Get Task Result (POST)
+```bash
+curl -X POST http://localhost:5073/getTaskResult \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientKey": "YOUR_API_KEY",
+    "taskId": 407533072
+  }'
+```
+
+**Response (Processing):**
+```json
+{
+  "errorId": 0,
+  "status": "processing"
+}
+```
+
+**Response (Ready):**
+```json
+{
+  "errorId": 0,
+  "status": "ready",
+  "solution": {
+    "token": "1.0x4AAA..."
+  }
+}
+```
+
+### Legacy Endpoints (Still Supported)
+- `GET /turnstile?url=URL&sitekey=KEY`
+- `GET /result?id=TASK_ID`
+
+### API Documentation
 Visit `http://localhost:5073` for interactive API documentation.
 
 ## ⚙️ Configuration
