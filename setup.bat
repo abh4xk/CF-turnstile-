@@ -47,9 +47,9 @@ if %errorlevel% neq 0 (
 echo ✅ Playwright browsers installed
 
 REM Start Redis server
-echo 🗄️ Starting Redis server...
-start /B "C:\Program Files\Redis\redis-server.exe" "C:\Program Files\Redis\redis.windows.conf"
-timeout /t 2 >nul
+echo 🗄️ Starting Redis server on IPv4...
+start /B "C:\Program Files\Redis\redis-server.exe" --bind 127.0.0.1 --port 6379
+timeout /t 3 >nul
 
 REM Run the application
 echo 🚀 Starting CF Turnstile Solver...

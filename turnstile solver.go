@@ -83,9 +83,20 @@ var (
 
 func initRedis() {
 	redisClient = redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:%d", CONFIG.RedisHost, CONFIG.RedisPort),
-		DB:   CONFIG.RedisDB,
+		Addr:     fmt.Sprintf("127.0.0.1:%d", CONFIG.RedisPort),
+		DB:       CONFIG.RedisDB,
+		Protocol: 2, // Force IPv4
 	})
+
+	// Test connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := redisClient.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("❌ Failed to connect to Redis: %v\nPlease make sure Redis is running on 127.0.0.1:%d", err, CONFIG.RedisPort)
+	}
+
 	log.Println("✅ Redis connected")
 }
 

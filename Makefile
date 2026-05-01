@@ -36,8 +36,10 @@ install:
 redis:
 	@echo "🗄️ Starting Redis server..."
 	@if not exist "C:\Program Files\Redis\redis-server.exe" (echo "Redis not found. Run 'make install' first." && exit 1)
-	start /B "C:\Program Files\Redis\redis-server.exe" "C:\Program Files\Redis\redis.windows.conf"
-	@echo "✅ Redis server started"
+	@echo "Starting Redis on IPv4 127.0.0.1:6379..."
+	start /B "C:\Program Files\Redis\redis-server.exe" --bind 127.0.0.1 --port 6379
+	@timeout /t 3 >nul
+	@echo "✅ Redis server started on 127.0.0.1:6379"
 
 # Stop Redis server
 redis-stop:
