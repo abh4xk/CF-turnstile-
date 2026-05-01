@@ -1,4 +1,4 @@
-module turnstile-solver
+module github.com/abh4xk/CF-turnstile-
 
 go 1.25.0
 
